@@ -6,66 +6,85 @@ from model import DictionaryModel
 from tqdm import tqdm
 
 # Hyperparameters
-hidden_size = 256  
-learning_rate = 1e-3
+vocab_size = 30522  # BERT vocab size, since BERT uncased tokenizer was used
+d_model = 256
+nhead = 1
+num_layers = 1
+dim_feedforward = 256
+learning_rate = 3e-4
 epochs = 10
-mask_prob = 0.33
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def train(train_loader, test_loader):
-    model = DictionaryModel(hidden_size).to(device)
-    criterion = nn.CrossEntropyLoss(ignore_index=-100)
+    model = DictionaryModel(vocab_size, d_model, nhead, num_layers, dim_feedforward).to(device)
+    criterion = nn.CrossEntropyLoss(ignore_index=0)  # Ignore padding token (0)
     optimizer = Adam(model.parameters(), lr=learning_rate)
 
     for epoch in range(epochs):
         model.train()
         total_loss = 0
 
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+        for batch in tqdm(train_loader):
             input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            word_end_pos = batch['word_end_pos'].to(device)
+            target_ids = batch['target_ids'].to(device)
 
             optimizer.zero_grad()
 
-            output = model(input_ids, attention_mask, word_end_pos)
+            batch_size, target_len = target_ids.shape
+            outputs = torch.zeros(batch_size, target_len, vocab_size).to(device)
 
-            # Prepare the target: the original (unmasked) word characters
-            target = input_ids[:, 1:max(word_end_pos)].clone()  # Exclude [CLS] token
-            target[target == 0] = -100  # Ignore padding in loss calculation
+            # Initialize decoder input with the first token of input_ids
+            decoder_input = input_ids[:, 0].unsqueeze(1)
 
-            loss = criterion(output.view(-1, 27), target.view(-1))
+            for t in range(target_len):
+                # Generate a prediction for the next token
+                output = model(decoder_input)
+                
+                outputs[:, t, :] = output[:, -1, :]
+
+                # Use teacher forcing: next input is current target
+                if t < target_len - 1:
+                    decoder_input = torch.cat([decoder_input, target_ids[:, t].unsqueeze(1)], dim=1)
+            
+            loss = criterion(outputs.contiguous().view(-1, vocab_size), target_ids.contiguous().view(-1))
+
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
 
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch [{epoch+1}/{epochs}], Average Loss: {avg_loss:.4f}")
-
-        # Evaluation
         model.eval()
         test_loss = 0
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="Evaluating"):
+            for batch in tqdm(test_loader):
                 input_ids = batch['input_ids'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                word_end_pos = batch['word_end_pos'].to(device)
+                target_ids = batch['target_ids'].to(device)
 
-                output = model(input_ids, attention_mask, word_end_pos)
+                batch_size, target_len = target_ids.shape
+                outputs = torch.zeros(batch_size, target_len, vocab_size).to(device)
 
-                target = input_ids[:, 1:max(word_end_pos)].clone()
-                target[target == 0] = -100
+                decoder_input = input_ids[:, 0].unsqueeze(1)
 
-                loss = criterion(output.view(-1, 27), target.view(-1))
+                for t in range(target_len):
+                    output = model(decoder_input)
+                    outputs[:, t, :] = output[:, -1, :]
+
+                    if t < target_len - 1:
+                        # During evaluation, use the model's own predictions
+                        _, next_token = output[:, -1, :].max(1)
+                        decoder_input = torch.cat([decoder_input, next_token.unsqueeze(1)], dim=1)
+
+                loss = criterion(outputs.contiguous().view(-1, vocab_size), target_ids.contiguous().view(-1))
+
                 test_loss += loss.item()
 
+        avg_loss = total_loss / len(train_loader)
         avg_test_loss = test_loss / len(test_loader)
-        print(f"Epoch [{epoch+1}/{epochs}], Test Loss: {avg_test_loss:.4f}")
+        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}, Test Loss: {avg_test_loss:.4f}")
 
     torch.save(model.state_dict(), 'model.pth')
 
 if __name__ == '__main__':
-    train_loader, test_loader = get_data_loaders('dictionary.json', batch_size=16, mask_prob=mask_prob)
+    train_loader, test_loader = get_data_loaders('dictionary.json', batch_size=16)
     train(train_loader, test_loader)
