@@ -6,10 +6,10 @@ from model import DictionaryModel
 from tqdm import tqdm
 
 # Hyperparameters
-vocab_size = 30522  # BERT vocab size, since BERT uncased tokenizer was used
+vocab_size = 27  # BERT vocab size, since BERT uncased tokenizer was used
 d_model = 256
-nhead = 1
-num_layers = 1
+nhead = 8
+num_layers = 8
 dim_feedforward = 256
 learning_rate = 3e-4
 epochs = 10
@@ -28,7 +28,8 @@ def train(train_loader, test_loader):
         for batch in tqdm(train_loader):
             input_ids = batch['input_ids'].to(device)
             target_ids = batch['target_ids'].to(device)
-
+            target_ids = target_ids - 1036  # Convert token IDs to 0-26 range
+            target_ids[target_ids < 0] = 0 #make sure padding tokens stay padding tokens
             optimizer.zero_grad()
 
             batch_size, target_len = target_ids.shape
@@ -42,7 +43,7 @@ def train(train_loader, test_loader):
                 output = model(decoder_input)
                 
                 outputs[:, t, :] = output[:, -1, :]
-
+                
                 # Use teacher forcing: next input is current target
                 if t < target_len - 1:
                     decoder_input = torch.cat([decoder_input, target_ids[:, t].unsqueeze(1)], dim=1)
@@ -65,11 +66,12 @@ def train(train_loader, test_loader):
                 outputs = torch.zeros(batch_size, target_len, vocab_size).to(device)
 
                 decoder_input = input_ids[:, 0].unsqueeze(1)
-
+                target_ids = target_ids - 1036  # Convert token IDs to 0-26 range
+                target_ids[target_ids < 0] = 0 #make sure padding tokens stay padding tokens
                 for t in range(target_len):
                     output = model(decoder_input)
                     outputs[:, t, :] = output[:, -1, :]
-
+                    
                     if t < target_len - 1:
                         # During evaluation, use the model's own predictions
                         _, next_token = output[:, -1, :].max(1)

@@ -31,7 +31,10 @@ class DictionaryDataset(Dataset):
         input_ids = tokenizer.encode(input_text, add_special_tokens=True, truncation=True, max_length=512)
 
         # Tokenize the original word (target)
-        target_ids = tokenizer.encode(word, add_special_tokens=True)
+        word_chars=[tokenizer.encode(char, add_special_tokens=False) for char in word]
+        word_chars_ids = [item for sublist in word_chars for item in sublist]
+        target_ids = torch.tensor(word_chars_ids)
+        #target_ids = tokenizer.encode(word, add_special_tokens=True)
 
         return {
             'input_ids': torch.tensor(input_ids),
